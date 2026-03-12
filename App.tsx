@@ -405,7 +405,7 @@ const App: React.FC = () => {
         </div>
 
         {/* API Key Warning Overlay - Gemini */}
-        {!process.env.API_KEY && (
+        {!process.env.GEMINI_API_KEY && (
            <div className="mb-6 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 flex items-start gap-3">
              <AlertCircle className="text-red-500 mt-0.5 shrink-0" />
              <div>
@@ -507,11 +507,11 @@ const App: React.FC = () => {
 
               {/* Status Indicator */}
                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className={`p-4 rounded-xl border flex items-center gap-3 ${process.env.API_KEY ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
-                      {process.env.API_KEY ? <CheckCircle2 size={20} /> : <AlertCircle size={20} />}
+                  <div className={`p-4 rounded-xl border flex items-center gap-3 ${process.env.GEMINI_API_KEY ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
+                      {process.env.GEMINI_API_KEY ? <CheckCircle2 size={20} /> : <AlertCircle size={20} />}
                       <div>
                         <p className="font-bold text-sm">Gemini AI (Inteligencia)</p>
-                        <p className="text-xs opacity-80">{process.env.API_KEY ? 'Conectado Correctamente' : 'Falta API Key'}</p>
+                        <p className="text-xs opacity-80">{process.env.GEMINI_API_KEY ? 'Conectado Correctamente' : 'Falta API Key'}</p>
                       </div>
                   </div>
                   <div className={`p-4 rounded-xl border flex items-center gap-3 ${isAuthenticated ? 'bg-green-50 border-green-200 text-green-800' : 'bg-gray-50 border-gray-200 text-gray-600'}`}>

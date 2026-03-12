@@ -2,7 +2,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { NotebookAnalysisResult, Patient } from "../types";
 
 const getAiClient = () => {
-  const apiKey = process.env.API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error("API Key is missing. Please set it in the Settings.");
   }
@@ -12,7 +12,7 @@ const getAiClient = () => {
 export const parsePatientData = async (inputText: string): Promise<Omit<Patient, 'id' | 'fecha'> | null> => {
   try {
     const ai = getAiClient();
-    const modelId = "gemini-3-flash-preview"; 
+    const modelId = "gemini-2.0-flash";
 
     const response = await ai.models.generateContent({
       model: modelId,
@@ -60,7 +60,7 @@ export const parsePatientData = async (inputText: string): Promise<Omit<Patient,
 export const parseNotebookEntry = async (inputText: string): Promise<NotebookAnalysisResult | null> => {
   try {
     const ai = getAiClient();
-    const modelId = "gemini-3-flash-preview";
+    const modelId = "gemini-2.0-flash";
 
     const today = new Date().toLocaleDateString('es-ES', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
     const todayISO = new Date().toISOString().split('T')[0];
