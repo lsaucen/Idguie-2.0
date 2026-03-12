@@ -93,6 +93,7 @@ export const initGoogleServices = async (clientId: string, onInitComplete: (succ
   window.gapi.load('client', async () => {
     try {
       await window.gapi.client.init({
+        apiKey: process.env.GEMINI_API_KEY,
         discoveryDocs: DISCOVERY_DOCS,
       });
       gapiInited = true;
@@ -131,8 +132,8 @@ export const handleLogin = async (): Promise<boolean> => {
           reject(resp);
           return;
         }
-        // Ensure we pass an object with access_token property
-        window.gapi.client.setToken({ access_token: resp.access_token });
+        // Ensure we pass the entire token response object
+        window.gapi.client.setToken(resp);
         resolve(true);
       };
 
