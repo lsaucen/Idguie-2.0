@@ -10,8 +10,8 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     define: {
-      // Define process.env.API_KEY so the existing code works without modification
-      'process.env.API_KEY': JSON.stringify(env.API_KEY || process.env.API_KEY || "AIzaSyCnDiDnWUiiah7W0bgyu9j9049GroIxcQg")
+      // Define process.env.GEMINI_API_KEY so the existing code works
+      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY || process.env.GEMINI_API_KEY || env.API_KEY || process.env.API_KEY || "AIzaSyCnDiDnWUiiah7W0bgyu9j9049GroIxcQg")
     },
     build: {
       outDir: 'dist',
