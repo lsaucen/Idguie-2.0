@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { parsePatientData } from '../services/geminiService';
 import { appendPatientToSheet } from '../services/googleApiService';
-import { Patient } from '../types';
+import { Patient, PSICOLOGO_OPTIONS } from '../types';
 import { Sparkles, FileSpreadsheet, Trash2, Loader2, Search, ChevronLeft, ChevronRight, UserPlus, UserCheck, CloudUpload, X } from 'lucide-react';
 
 interface PatientManagerProps {
@@ -14,6 +14,7 @@ interface PatientManagerProps {
 
 export const PatientManager: React.FC<PatientManagerProps> = ({ patients, onAddPatient, onDeletePatient, isAuthenticated, spreadsheetId }) => {
   const [inputText, setInputText] = useState('');
+  const [selectedPsicologo, setSelectedPsicologo] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{type: 'error' | 'success', text: string} | null>(null);
@@ -28,6 +29,10 @@ export const PatientManager: React.FC<PatientManagerProps> = ({ patients, onAddP
 
   const handleProcess = async () => {
     if (!inputText.trim()) return;
+    if (!selectedPsicologo) {
+      setStatusMessage({ type: 'error', text: 'Selecciona el psicólogo antes de procesar.' });
+      return;
+    }
     
     setIsProcessing(true);
     setStatusMessage(null);
@@ -39,7 +44,8 @@ export const PatientManager: React.FC<PatientManagerProps> = ({ patients, onAddP
         const newPatient: Patient = {
           id: crypto.randomUUID(),
           fecha: new Date().toLocaleDateString('es-ES'),
-          ...parsedData
+          ...parsedData,
+          psicologo: selectedPsicologo, // dropdown always overrides AI
         };
 
         // 2. Send to Google Sheets if configured
@@ -151,6 +157,21 @@ export const PatientManager: React.FC<PatientManagerProps> = ({ patients, onAddP
 
       {/* Input Section */}
       <div className="bg-white dark:bg-gray-800 p-4 md:p-6 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
+        <div className="mb-4">
+          <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
+            Psicólogo <span className="text-red-500">*</span>
+          </label>
+          <select
+            value={selectedPsicologo}
+            onChange={(e) => setSelectedPsicologo(e.target.value)}
+            className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-lg text-sm focus:ring-2 focus:ring-teal-500 outline-none"
+          >
+            <option value="">— Selecciona un psicólogo —</option>
+            {PSICOLOGO_OPTIONS.map(p => (
+              <option key={p.nombre} value={p.nombre}>{p.nombre}</option>
+            ))}
+          </select>
+        </div>
         <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
           Entrada Rápida
         </label>

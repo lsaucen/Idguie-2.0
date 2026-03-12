@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { parseNotebookEntry } from '../services/geminiService';
-import { createGoogleTask, createGoogleCalendarEvent } from '../services/googleApiService';
+import { addTaskToTaskList, createGoogleTask, createGoogleCalendarEvent, resolveCalendarIdForEvent } from '../services/googleApiService';
 import { Task, CalendarEvent } from '../types';
-import { Sparkles, CheckCircle2, Calendar, Clock, Loader2, Flag, Check, Trash2, AlertTriangle, X } from 'lucide-react';
+import { Sparkles, CheckCircle2, Calendar, Clock, Loader2, Flag, Check, Trash2, AlertTriangle, X, CloudOff, Cloud } from 'lucide-react';
 
 interface DigitalNotebookProps {
   tasks: Task[];
@@ -13,6 +13,8 @@ interface DigitalNotebookProps {
   onDeleteTask: (id: string) => void;
   onDeleteEvent: (id: string) => void;
   isAuthenticated: boolean;
+  taskListId: string;
+  calendarIds: Map<string, string>;
 }
 
 export const DigitalNotebook: React.FC<DigitalNotebookProps> = ({ 
@@ -23,11 +25,14 @@ export const DigitalNotebook: React.FC<DigitalNotebookProps> = ({
   onToggleTask, 
   onDeleteTask,
   onDeleteEvent,
-  isAuthenticated 
+  isAuthenticated,
+  taskListId,
+  calendarIds
 }) => {
   const [inputText, setInputText] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [manualPriority, setManualPriority] = useState<'Auto' | 'High' | 'Medium' | 'Low'>('Auto');
+  const [syncResult, setSyncResult] = useState<{ tasks: number; tasksFailed: number; events: number; eventsFailed: number } | null>(null);
   
   // Delete Modal State
   const [deleteModal, setDeleteModal] = useState<{isOpen: boolean, type: 'task' | 'event', id: string} | null>(null);
@@ -45,7 +50,9 @@ export const DigitalNotebook: React.FC<DigitalNotebookProps> = ({
           id: crypto.randomUUID(),
           title: t.title,
           isDone: false,
-          priority: manualPriority !== 'Auto' ? manualPriority : t.priority
+          priority: manualPriority !== 'Auto' ? manualPriority : t.priority,
+          date: t.date || undefined,
+          time: t.time || undefined,
         }));
 
         const newEvents: CalendarEvent[] = result.events.map(e => ({
@@ -53,27 +60,41 @@ export const DigitalNotebook: React.FC<DigitalNotebookProps> = ({
           title: e.title,
           date: e.date,
           time: e.time,
-          description: e.description
+          description: [e.description, e.psicologo ? `Psicólogo: ${e.psicologo}` : ''].filter(Boolean).join(' — ')
         }));
 
         // 2. Real Integration: Send to Google
+        let tasksSynced = 0;
+        let tasksFailed = 0;
+        let eventsSynced = 0;
+        let eventsFailed = 0;
+
         if (isAuthenticated) {
-          // Process Tasks
           for (const task of newTasks) {
             try {
-              await createGoogleTask(task);
+              if (taskListId) {
+                await addTaskToTaskList(taskListId, task);
+              } else {
+                await createGoogleTask(task);
+              }
+              tasksSynced++;
             } catch (e) {
               console.error("Failed to sync task", e);
+              tasksFailed++;
             }
           }
-          // Process Events
           for (const event of newEvents) {
             try {
-              await createGoogleCalendarEvent(event);
+              const calId = resolveCalendarIdForEvent(event, calendarIds);
+              await createGoogleCalendarEvent(event, calId);
+              eventsSynced++;
             } catch (e) {
-               console.error("Failed to sync event", e);
+              console.error("Failed to sync event", e);
+              eventsFailed++;
             }
           }
+          setSyncResult({ tasks: tasksSynced, tasksFailed, events: eventsSynced, eventsFailed });
+          setTimeout(() => setSyncResult(null), 6000);
         }
 
         // 3. Update Local UI
@@ -82,9 +103,9 @@ export const DigitalNotebook: React.FC<DigitalNotebookProps> = ({
         setInputText('');
         setManualPriority('Auto');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
-      alert("Error al procesar la nota.");
+      alert(`Error al procesar la nota:\n${error.message}`);
     } finally {
       setIsProcessing(false);
     }
@@ -201,6 +222,32 @@ export const DigitalNotebook: React.FC<DigitalNotebookProps> = ({
               {isProcessing ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} />}
               Organizar & Sync
             </button>
+
+            {/* Sync result banner */}
+            {syncResult && (
+              <div className={`flex flex-wrap items-center gap-2 text-xs px-3 py-2 rounded-lg ${
+                syncResult.tasksFailed === 0 && syncResult.eventsFailed === 0
+                  ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300'
+                  : 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-300'
+              }`}>
+                <Cloud size={14} className="shrink-0" />
+                {syncResult.tasks > 0 && (
+                  <span><strong>{syncResult.tasks}</strong> {syncResult.tasks === 1 ? 'tarea' : 'tareas'} → Google Tasks</span>
+                )}
+                {syncResult.tasks > 0 && syncResult.events > 0 && <span className="opacity-40">·</span>}
+                {syncResult.events > 0 && (
+                  <span><strong>{syncResult.events}</strong> {syncResult.events === 1 ? 'evento' : 'eventos'} → Google Calendar</span>
+                )}
+                {syncResult.tasksFailed + syncResult.eventsFailed > 0 && (
+                  <span className="text-red-500 dark:text-red-400 ml-1">
+                    ({syncResult.tasksFailed + syncResult.eventsFailed} fallaron)
+                  </span>
+                )}
+                {syncResult.tasks === 0 && syncResult.events === 0 && (
+                  <span>Sin elementos para sincronizar.</span>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>

@@ -15,12 +15,14 @@ export interface Task {
   title: string;
   isDone: boolean;
   priority: 'High' | 'Medium' | 'Low';
+  date?: string;
+  time?: string;
 }
 
 export interface CalendarEvent {
   id: string;
   title: string;
-  date: string; // ISO string or human readable
+  date: string;
   time: string;
   description?: string;
 }
@@ -30,7 +32,7 @@ export interface Payment {
   fecha: string;
   paciente: string;
   monto: number;
-  metodo: string; // Yape, Plin, Transferencia, Efectivo
+  metodo: string;
   comprobanteUrl: string;
   driveFileId: string;
 }
@@ -39,22 +41,32 @@ export interface WaitingListEntry {
   id: string;
   nombre: string;
   telefono: string;
-  preferenciaHoraria: string; // ej: "Tardes", "Lunes", "Urgente"
+  preferenciaHoraria: string;
   notas: string;
-  fechaAgregado: number; // Timestamp for sorting
+  fechaAgregado: number;
 }
 
 export interface NotebookAnalysisResult {
-  tasks: Array<{ title: string; priority: 'High' | 'Medium' | 'Low' }>;
-  events: Array<{ title: string; date: string; time: string; description: string }>;
+  tasks: Array<{ title: string; priority: 'High' | 'Medium' | 'Low'; date?: string; time?: string }>;
+  events: Array<{ title: string; date: string; time: string; description: string; psicologo?: string }>;
 }
 
 export interface AppSettings {
   googleClientId: string;
   spreadsheetId: string;
-  financeFolderId: string; // New: Folder ID for receipts
+  paymentsSpreadsheetId: string;
+  financeFolderId: string;
+  taskListId: string;
   theme: 'light' | 'dark';
 }
+
+export const PSICOLOGO_OPTIONS: { nombre: string; calendario: string }[] = [
+  { nombre: 'Aurora de la Oz',  calendario: 'Terapias Aurora' },
+  { nombre: 'Isabel Ruiz',      calendario: 'Terapia Adolescente (Isabel Ruiz)' },
+  { nombre: 'Ana Lucía',        calendario: 'Terapia Ana Lucía' },
+  { nombre: 'Ruth Rodríguez',   calendario: 'Terapia Ruth' },
+  { nombre: 'Julio Sánchez',    calendario: 'Terapia Sexólogo' },
+];
 
 export enum ViewState {
   DASHBOARD = 'DASHBOARD',

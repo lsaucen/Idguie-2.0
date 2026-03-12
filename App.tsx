@@ -6,8 +6,12 @@ import { FinanceManager } from './components/FinanceManager';
 import { WaitingListManager } from './components/WaitingListManager'; // Import new component
 import { Dashboard } from './components/Dashboard';
 import { Patient, Task, CalendarEvent, ViewState, AppSettings, WaitingListEntry, Payment } from './types';
-import { initGoogleServices, handleLogin, handleLogout, getUserProfile } from './services/googleApiService';
-import { Settings as SettingsIcon, AlertCircle, Menu, HeartPulse, LogIn, Save, LogOut, Database, Moon, Sun, User, CheckCircle2 } from 'lucide-react';
+import {
+  initGoogleServices, handleLogin, handleLogout, getUserProfile,
+  createSpreadsheet, createPaymentsSpreadsheet, createDriveFolder, createTasksList, addTaskToTaskList,
+  getCalendarsMap, syncPatientsToSheet, syncPaymentsToSheet, ensurePagosSheet
+} from './services/googleApiService';
+import { Settings as SettingsIcon, AlertCircle, Menu, HeartPulse, LogIn, Save, LogOut, Database, Moon, Sun, User, CheckCircle2, Loader2 } from 'lucide-react';
 
 // Data Retention Configuration
 const RETENTION_DAYS = 90;
@@ -36,10 +40,16 @@ const App: React.FC = () => {
   const [settings, setSettings] = useState<AppSettings>({
     googleClientId: localStorage.getItem('googleClientId') || DEFAULT_CLIENT_ID,
     spreadsheetId: localStorage.getItem('spreadsheetId') || '',
+    paymentsSpreadsheetId: localStorage.getItem('paymentsSpreadsheetId') || '',
     financeFolderId: localStorage.getItem('financeFolderId') || '',
+    taskListId: localStorage.getItem('taskListId') || '',
     theme: (localStorage.getItem('theme') as 'light' | 'dark') || 'light'
   });
   const [isGapiReady, setIsGapiReady] = useState(false);
+  const [settingsSaved, setSettingsSaved] = useState(false);
+  const [isSettingUp, setIsSettingUp] = useState(false);
+  const [setupStatus, setSetupStatus] = useState('');
+  const [calendarIds, setCalendarIds] = useState<Map<string, string>>(new Map());
 
   // --- Persistence Logic ---
 
@@ -118,6 +128,96 @@ const App: React.FC = () => {
     }
   }, [settings.googleClientId]);
 
+  const performFirstLoginSetup = async (currentPatients: Patient[], currentPayments: Payment[], currentTasks: Task[]) => {
+    setIsSettingUp(true);
+    let sheetId = localStorage.getItem('spreadsheetId') || '';
+    let folderId = localStorage.getItem('financeFolderId') || '';
+    let tListId = localStorage.getItem('taskListId') || '';
+    
+    // Paso 1
+    if (!sheetId) {
+      try {
+        setSetupStatus('Creando Google Sheet...');
+        sheetId = await createSpreadsheet();
+        localStorage.setItem('spreadsheetId', sheetId);
+        setSettings(prev => ({ ...prev, spreadsheetId: sheetId }));
+      } catch (error) {
+        console.error('Error creating spreadsheet:', error);
+      }
+
+      if (sheetId && currentPatients.length > 0) {
+        try {
+          setSetupStatus('Sincronizando pacientes...');
+          await syncPatientsToSheet(sheetId, currentPatients);
+        } catch (error) {
+          console.error('Error syncing patients:', error);
+        }
+      }
+
+      if (sheetId && currentPayments.length > 0) {
+        try {
+          setSetupStatus('Sincronizando pagos...');
+          await syncPaymentsToSheet(sheetId, currentPayments);
+        } catch (error) {
+          console.error('Error syncing payments:', error);
+        }
+      }
+    }
+
+    // Paso 1b
+    if (sheetId) {
+      try {
+        setSetupStatus('Asegurando hoja de pagos...');
+        await ensurePagosSheet(sheetId);
+      } catch (error) {
+        console.error('Error ensuring pagos sheet:', error);
+      }
+    }
+
+    // Paso 2
+    if (!folderId) {
+      try {
+        setSetupStatus('Creando carpeta de comprobantes...');
+        folderId = await createDriveFolder('Comprobantes Psicología');
+        localStorage.setItem('financeFolderId', folderId);
+        setSettings(prev => ({ ...prev, financeFolderId: folderId }));
+      } catch (error) {
+        console.error('Error creating drive folder:', error);
+      }
+    }
+
+    // Paso 3
+    if (!tListId) {
+      try {
+        setSetupStatus("Creando lista 'Idguie's task'...");
+        tListId = await createTasksList("Idguie's task");
+        localStorage.setItem('taskListId', tListId);
+        setSettings(prev => ({ ...prev, taskListId: tListId }));
+        
+        if (currentTasks.length > 0) {
+          setSetupStatus('Sincronizando tareas...');
+          for (const task of currentTasks) {
+            try { await addTaskToTaskList(tListId, task); } catch { /* skip */ }
+          }
+        }
+      } catch (error) {
+        console.error('Error creating tasks list:', error);
+      }
+    }
+
+    // Paso 4
+    try {
+      setSetupStatus('Cargando calendarios...');
+      const calMap = await getCalendarsMap();
+      setCalendarIds(calMap);
+    } catch (error) {
+      console.error('Error loading calendars:', error);
+    }
+
+    setSetupStatus('¡Todo listo!');
+    setTimeout(() => setIsSettingUp(false), 1200);
+  };
+
   const onLogin = async () => {
     if (!isGapiReady) {
       setCurrentView(ViewState.SETTINGS);
@@ -128,6 +228,7 @@ const App: React.FC = () => {
       setIsAuthenticated(true);
       const profile = await getUserProfile();
       setUserProfile(profile);
+      await performFirstLoginSetup(patients, payments, tasks);
     } catch (error) {
       alert("Fallo al iniciar sesión en Google");
     }
@@ -137,13 +238,27 @@ const App: React.FC = () => {
     handleLogout();
     setIsAuthenticated(false);
     setUserProfile(null);
+    setCalendarIds(new Map());
   };
 
   const saveSettings = () => {
+    const oldClientId = localStorage.getItem('googleClientId');
     localStorage.setItem('googleClientId', settings.googleClientId);
     localStorage.setItem('spreadsheetId', settings.spreadsheetId);
+    localStorage.setItem('paymentsSpreadsheetId', settings.paymentsSpreadsheetId);
     localStorage.setItem('financeFolderId', settings.financeFolderId);
-    window.location.reload(); 
+    localStorage.setItem('taskListId', settings.taskListId);
+    
+    if (oldClientId !== settings.googleClientId) {
+      setIsGapiReady(false);
+      onLogout(); // Force logout if client ID changes
+      initGoogleServices(settings.googleClientId, (success) => {
+        setIsGapiReady(success);
+      });
+    }
+    
+    setSettingsSaved(true);
+    setTimeout(() => setSettingsSaved(false), 3000);
   };
 
   const toggleTheme = () => {
@@ -233,6 +348,15 @@ const App: React.FC = () => {
       
       {/* Main Content */}
       <main className="flex-1 overflow-auto p-4 md:p-8 pt-20 md:pt-8 w-full relative">
+        {isSettingUp && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-8 flex flex-col items-center gap-4 max-w-sm w-full mx-4 border border-gray-100 dark:border-gray-700">
+              <Loader2 size={40} className="text-teal-500 animate-spin" />
+              <p className="text-gray-800 dark:text-white font-semibold text-lg text-center">Configurando tu cuenta</p>
+              <p className="text-gray-500 dark:text-gray-400 text-sm text-center">{setupStatus}</p>
+            </div>
+          </div>
+        )}
         {/* Top Bar: Auth Status */}
         <div className="flex flex-col sm:flex-row justify-end mb-4 gap-3 items-end sm:items-center">
            <div className="hidden md:flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500 bg-gray-50 dark:bg-gray-800 px-3 py-1 rounded-full border border-gray-100 dark:border-gray-700">
@@ -322,13 +446,15 @@ const App: React.FC = () => {
             onDeleteTask={handleDeleteTask}
             onDeleteEvent={handleDeleteEvent}
             isAuthenticated={isAuthenticated}
+            taskListId={settings.taskListId}
+            calendarIds={calendarIds}
           />
         )}
 
         {currentView === ViewState.FINANCE && (
           <FinanceManager 
             isAuthenticated={isAuthenticated}
-            spreadsheetId={settings.spreadsheetId}
+            spreadsheetId={settings.paymentsSpreadsheetId || settings.spreadsheetId}
             financeFolderId={settings.financeFolderId}
             payments={payments}
             onAddPayment={handleAddPayment}
@@ -422,7 +548,7 @@ const App: React.FC = () => {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Google Sheet ID</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Google Sheet ID (Pacientes)</label>
                     <input 
                       type="text" 
                       value={settings.spreadsheetId}
@@ -432,6 +558,20 @@ const App: React.FC = () => {
                     />
                      <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
                       El ID que aparece en la URL de tu hoja de cálculo.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Google Sheet ID (Pagos)</label>
+                    <input 
+                      type="text" 
+                      value={settings.paymentsSpreadsheetId}
+                      onChange={(e) => setSettings({...settings, paymentsSpreadsheetId: e.target.value})}
+                      className="w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-lg text-sm font-mono focus:ring-2 focus:ring-teal-500 outline-none"
+                      placeholder="1BxiMVs0XRA5nFMdKb..."
+                    />
+                     <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                      El ID de la hoja de cálculo para la matriz de pagos.
                     </p>
                   </div>
 
@@ -450,13 +590,19 @@ const App: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="pt-4 flex justify-end">
+                <div className="pt-4 flex justify-end items-center gap-4">
+                  {settingsSaved && (
+                    <span className="flex items-center gap-2 text-green-600 dark:text-green-400 text-sm font-medium animate-in fade-in">
+                      <CheckCircle2 size={16} />
+                      ¡Configuración guardada!
+                    </span>
+                  )}
                   <button 
                     onClick={saveSettings}
                     className="flex items-center gap-2 bg-teal-600 text-white px-6 py-2.5 rounded-xl hover:bg-teal-700 transition-colors shadow-lg hover:shadow-teal-500/30"
                   >
                     <Save size={18} />
-                    Guardar y Recargar
+                    Guardar
                   </button>
                 </div>
               </div>
@@ -470,7 +616,7 @@ const App: React.FC = () => {
                 <ol className="list-decimal pl-5 space-y-1 text-xs leading-relaxed opacity-90">
                   <li>Ve a <a href="https://console.cloud.google.com" target="_blank" className="underline font-semibold hover:text-blue-600">Google Cloud Console</a> e inicia sesión.</li>
                   <li>Crea un <strong>Nuevo Proyecto</strong> (ej: "Asistente Idguie").</li>
-                  <li>En el menú, ve a <strong>APIs y Servicios > Biblioteca</strong> y habilita:
+                  <li>En el menú, ve a <strong>APIs y Servicios &gt; Biblioteca</strong> y habilita:
                       <ul className="list-disc pl-4 mt-1 mb-1 font-mono text-[10px]">
                         <li>Google Sheets API</li>
                         <li>Google Tasks API</li>
@@ -479,7 +625,7 @@ const App: React.FC = () => {
                       </ul>
                   </li>
                   <li>Ve a <strong>Pantalla de consentimiento de OAuth</strong>, selecciona "External" y rellena el nombre y correos.</li>
-                  <li>Ve a <strong>Credenciales > Crear Credenciales > ID de cliente de OAuth</strong>.</li>
+                  <li>Ve a <strong>Credenciales &gt; Crear Credenciales &gt; ID de cliente de OAuth</strong>.</li>
                   <li>Selecciona "Aplicación web". En "Orígenes autorizados de JavaScript", pon la URL de tu app (ej: <code>http://localhost:5173</code> si estás probando).</li>
                   <li>Copia el <strong>ID de cliente</strong> que te dan y pégalo arriba.</li>
                 </ol>

@@ -62,14 +62,29 @@ export const parseNotebookEntry = async (inputText: string): Promise<NotebookAna
     const ai = getAiClient();
     const modelId = "gemini-3-flash-preview";
 
+    const today = new Date().toLocaleDateString('es-ES', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    const todayISO = new Date().toISOString().split('T')[0];
+
     const response = await ai.models.generateContent({
       model: modelId,
-      contents: `Analyze the following notebook entry and extract actionable items.
-      Separate them into 'tasks' (to-do items) and 'events' (appointments with specific times/dates).
+      contents: `Eres un asistente de secretaría de un centro de psicología.
+      Analiza la siguiente nota del usuario y extrae tareas (tasks) y eventos (events).
       
-      Input Text: "${inputText}"
+      Lista de psicólogos con sus calendarios exactos:
+      - Aurora de la Oz       -> "Terapias Aurora"
+      - Isabel Ruiz           -> "Terapia Adolescente (Isabel Ruiz)"
+      - Ana Lucía             -> "Terapia Ana Lucia"
+      - Ruth Rodríguez        -> "Terapia Ruth"
+      - Julio Sánchez         -> "Terapia Sexologo"
       
-      Date Reference: Today is ${new Date().toLocaleDateString()}.
+      Fecha de hoy: ${today} (${todayISO})
+      
+      Reglas:
+      - events: citas con fecha y hora. Si hay psicólogo, ponerlo en campo 'psicologo'. Default fecha = hoy (${todayISO}), default hora = "09:00".
+      - tasks: pendientes. Extraer date/time si se mencionan, sino dejar "".
+      - Prioridad: High=urgente, Low=rutinario, Medium=por defecto.
+      
+      Nota del usuario: "${inputText}"
       `,
       config: {
         responseMimeType: "application/json",
@@ -83,6 +98,8 @@ export const parseNotebookEntry = async (inputText: string): Promise<NotebookAna
                 properties: {
                   title: { type: Type.STRING },
                   priority: { type: Type.STRING, enum: ["High", "Medium", "Low"] },
+                  date: { type: Type.STRING, description: "YYYY-MM-DD o vacío" },
+                  time: { type: Type.STRING, description: "HH:MM o vacío" }
                 }
               }
             },
@@ -95,6 +112,7 @@ export const parseNotebookEntry = async (inputText: string): Promise<NotebookAna
                   date: { type: Type.STRING, description: "YYYY-MM-DD format" },
                   time: { type: Type.STRING, description: "HH:MM format" },
                   description: { type: Type.STRING },
+                  psicologo: { type: Type.STRING, description: "Nombre del psicólogo o vacío" }
                 }
               }
             }

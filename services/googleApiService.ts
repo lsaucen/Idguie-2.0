@@ -1,5 +1,37 @@
 import { Patient, Task, CalendarEvent, Payment } from "../types";
 
+const normalize = (s: string) =>
+  s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+// Calendar name → keyword mapping for auto-routing events
+const PSICOLOGO_CALENDAR_KEYWORDS: { calendarName: string; keywords: string[] }[] = [
+  { calendarName: 'Terapias Aurora',               keywords: ['aurora de la oz', 'aurora'] },
+  { calendarName: 'Terapia Adolescente (Isabel Ruiz)', keywords: ['isabel ruiz', 'isabel', 'adolescente'] },
+  { calendarName: 'Terapia Ana Lucia',             keywords: ['ana lucia', 'ana lucía', 'ana'] },
+  { calendarName: 'Terapia Ruth',                  keywords: ['ruth rodriguez', 'ruth rodríguez', 'ruth'] },
+  { calendarName: 'Terapia Sexologo',              keywords: ['julio sanchez', 'julio sánchez', 'julio', 'sexologo', 'sexólogo'] },
+];
+
+const findCalendarId = (calendarMap: Map<string, string>, targetName: string): string | undefined => {
+  const direct = calendarMap.get(targetName);
+  if (direct) return direct;
+  const normalTarget = normalize(targetName);
+  for (const [name, id] of calendarMap) {
+    if (normalize(name) === normalTarget) return id;
+  }
+  return undefined;
+};
+
+export const resolveCalendarIdForEvent = (event: CalendarEvent, calendarMap: Map<string, string>): string => {
+  const searchText = normalize(`${event.title} ${event.description || ''} ${(event as any).psicologo || ''}`);
+  for (const entry of PSICOLOGO_CALENDAR_KEYWORDS) {
+    if (entry.keywords.some(kw => searchText.includes(normalize(kw)))) {
+      return findCalendarId(calendarMap, entry.calendarName) || 'primary';
+    }
+  }
+  return 'primary';
+};
+
 // Declare globals for Google Scripts loaded in HTML
 declare global {
   interface Window {
@@ -23,11 +55,40 @@ let tokenClient: any;
 let gapiInited = false;
 let gisInited = false;
 
-export const initGoogleServices = (clientId: string, onInitComplete: (success: boolean) => void) => {
-  if (!window.gapi || !window.google) {
-    console.error("Google scripts not loaded");
+// Wait for window.gapi and window.google to be available (loaded via async defer scripts)
+const waitForGoogleScripts = (): Promise<void> => {
+  return new Promise((resolve, reject) => {
+    if (window.gapi && window.google) {
+      resolve();
+      return;
+    }
+    let attempts = 0;
+    const maxAttempts = 100; // up to 10 seconds
+    const interval = setInterval(() => {
+      attempts++;
+      if (window.gapi && window.google) {
+        clearInterval(interval);
+        resolve();
+      } else if (attempts >= maxAttempts) {
+        clearInterval(interval);
+        reject(new Error("Google scripts no cargaron. Recarga la página e intenta de nuevo."));
+      }
+    }, 100);
+  });
+};
+
+export const initGoogleServices = async (clientId: string, onInitComplete: (success: boolean) => void) => {
+  try {
+    await waitForGoogleScripts();
+  } catch (error) {
+    console.error(error);
+    onInitComplete(false);
     return;
   }
+
+  // Reset flags to allow re-initialization when Client ID changes
+  gapiInited = false;
+  gisInited = false;
 
   window.gapi.load('client', async () => {
     try {
@@ -38,16 +99,22 @@ export const initGoogleServices = (clientId: string, onInitComplete: (success: b
       checkInit();
     } catch (error) {
       console.error("Error initializing GAPI client", error);
+      onInitComplete(false);
     }
   });
 
-  tokenClient = window.google.accounts.oauth2.initTokenClient({
-    client_id: clientId,
-    scope: SCOPES,
-    callback: '', // defined at request time
-  });
-  gisInited = true;
-  checkInit();
+  try {
+    tokenClient = window.google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: SCOPES,
+      callback: '',
+    });
+    gisInited = true;
+    checkInit();
+  } catch (error) {
+    console.error("Error initializing GIS token client", error);
+    onInitComplete(false);
+  }
 
   function checkInit() {
     if (gapiInited && gisInited) {
@@ -62,7 +129,10 @@ export const handleLogin = async (): Promise<boolean> => {
       tokenClient.callback = async (resp: any) => {
         if (resp.error) {
           reject(resp);
+          return;
         }
+        // Ensure we pass an object with access_token property
+        window.gapi.client.setToken({ access_token: resp.access_token });
         resolve(true);
       };
 
@@ -84,7 +154,7 @@ export const handleLogout = () => {
   const token = window.gapi.client.getToken();
   if (token !== null) {
     window.google.accounts.oauth2.revoke(token.access_token);
-    window.gapi.client.setToken('');
+    window.gapi.client.setToken(null);
   }
 };
 
@@ -123,7 +193,7 @@ export const appendPatientToSheet = async (spreadsheetId: string, patient: Patie
   try {
     const response = await window.gapi.client.sheets.spreadsheets.values.append({
       spreadsheetId: spreadsheetId,
-      range: 'Sheet1!A:H', // Assuming generic Sheet1, columns A to H
+      range: 'Pacientes!A:H', // Assuming generic Sheet1, columns A to H
       valueInputOption: 'USER_ENTERED',
       resource: body,
     });
@@ -203,14 +273,25 @@ export const uploadFileToDrive = async (file: File, folderId: string): Promise<{
 
 // --- Google Tasks API ---
 
+const buildTaskResource = (task: Task) => {
+  const resource: any = {
+    title: task.date ? `[${task.priority}] ${task.title} — ${task.date} ${task.time || ''}`.trim() : `[${task.priority}] ${task.title}`,
+    status: task.isDone ? 'completed' : 'needsAction',
+  };
+  if (task.date) {
+    resource.due = `${task.date}T${task.time || '00:00'}:00.000Z`;
+  }
+  return resource;
+};
+
 export const createGoogleTask = async (task: Task) => {
   try {
+    const resource = buildTaskResource(task);
+    resource.notes = "Creado desde Wellness Assistant Pro";
+    
     const response = await window.gapi.client.tasks.tasks.insert({
       tasklist: '@default',
-      resource: {
-        title: `[${task.priority}] ${task.title}`,
-        notes: "Creado desde Wellness Assistant Pro"
-      }
+      resource: resource
     });
     return response.result;
   } catch (error) {
@@ -221,7 +302,7 @@ export const createGoogleTask = async (task: Task) => {
 
 // --- Google Calendar API ---
 
-export const createGoogleCalendarEvent = async (event: CalendarEvent) => {
+export const createGoogleCalendarEvent = async (event: CalendarEvent, calendarId: string = 'primary') => {
   // Construct ISO datetime strings
   // Assuming 'date' is YYYY-MM-DD and 'time' is HH:MM
   const startDateTime = new Date(`${event.date}T${event.time}:00`);
@@ -242,7 +323,7 @@ export const createGoogleCalendarEvent = async (event: CalendarEvent) => {
 
   try {
     const response = await window.gapi.client.calendar.events.insert({
-      calendarId: 'primary',
+      calendarId: calendarId,
       resource: resource,
     });
     return response.result;
@@ -250,4 +331,148 @@ export const createGoogleCalendarEvent = async (event: CalendarEvent) => {
     console.error("Error creating event", error);
     throw error;
   }
+};
+
+// --- Auto-Setup Functions ---
+
+export const createSpreadsheet = async (): Promise<string> => {
+  const createResponse = await window.gapi.client.sheets.spreadsheets.create({
+    resource: {
+      properties: { title: 'Idguie - Psicología' },
+      sheets: [
+        { properties: { title: 'Pacientes' } },
+      ],
+    },
+  });
+  const spreadsheetId = createResponse.result.spreadsheetId;
+  
+  try {
+    await window.gapi.client.sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId,
+      resource: {
+        valueInputOption: 'USER_ENTERED',
+        data: [
+          { range: 'Pacientes!A1:H1', values: [['Fecha', 'Nombre', 'Apellido', 'Edad', 'Documento', 'Descripción', 'Psicólogo', 'Tipo']] },
+        ],
+      },
+    });
+  } catch (e) {
+    console.warn("Non-fatal error setting headers:", e);
+  }
+  
+  return spreadsheetId;
+};
+
+export const createPaymentsSpreadsheet = async (): Promise<string> => {
+  const createResponse = await window.gapi.client.sheets.spreadsheets.create({
+    resource: {
+      properties: { title: 'Matriz de Pagos' },
+      sheets: [
+        { properties: { title: 'Pagos' } },
+      ],
+    },
+  });
+  const spreadsheetId = createResponse.result.spreadsheetId;
+  await window.gapi.client.sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId,
+    resource: {
+      valueInputOption: 'USER_ENTERED',
+      data: [
+        { range: 'Pagos!A1:E1', values: [['Fecha', 'Paciente', 'Monto', 'Método', 'Comprobante URL']] },
+      ],
+    },
+  });
+  return spreadsheetId;
+};
+
+export const createDriveFolder = async (name: string): Promise<string> => {
+  const response = await window.gapi.client.drive.files.create({
+    resource: { name, mimeType: 'application/vnd.google-apps.folder' },
+    fields: 'id',
+  });
+  return response.result.id;
+};
+
+export const ensurePagosSheet = async (spreadsheetId: string): Promise<void> => {
+  try {
+    const response = await window.gapi.client.sheets.spreadsheets.get({
+      spreadsheetId,
+    });
+    const sheets = response.result.sheets || [];
+    const pagosSheetExists = sheets.some((s: any) => s.properties?.title === 'Pagos');
+
+    if (!pagosSheetExists) {
+      await window.gapi.client.sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        resource: {
+          requests: [
+            {
+              addSheet: {
+                properties: {
+                  title: 'Pagos',
+                },
+              },
+            },
+          ],
+        },
+      });
+
+      await window.gapi.client.sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: 'Pagos!A1:E1',
+        valueInputOption: 'USER_ENTERED',
+        resource: {
+          values: [['Fecha', 'Paciente', 'Monto', 'Método', 'Comprobante URL']],
+        },
+      });
+    }
+  } catch (error) {
+    console.error("Error ensuring Pagos sheet:", error);
+    throw error;
+  }
+};
+
+export const createTasksList = async (name: string): Promise<string> => {
+  const response = await window.gapi.client.tasks.tasklists.insert({
+    resource: { title: name },
+  });
+  return response.result.id;
+};
+
+export const addTaskToTaskList = async (taskListId: string, task: Task): Promise<void> => {
+  await window.gapi.client.tasks.tasks.insert({
+    tasklist: taskListId,
+    resource: buildTaskResource(task),
+  });
+};
+
+export const getCalendarsMap = async (): Promise<Map<string, string>> => {
+  const response = await window.gapi.client.calendar.calendarList.list();
+  const map = new Map<string, string>();
+  for (const cal of response.result.items || []) {
+    map.set(cal.summary, cal.id);
+  }
+  return map;
+};
+
+export const syncPatientsToSheet = async (spreadsheetId: string, patients: Patient[]): Promise<void> => {
+  if (!patients.length) return;
+  const values = patients.map(p => [p.fecha, p.nombre, p.apellido, p.edad, p.documentoIdentidad, p.descripcion, p.psicologo, p.tipo]);
+  await window.gapi.client.sheets.spreadsheets.values.append({
+    spreadsheetId,
+    range: 'Pacientes!A:H',
+    valueInputOption: 'USER_ENTERED',
+    resource: { values },
+  });
+};
+
+export const syncPaymentsToSheet = async (spreadsheetId: string, payments: Payment[]): Promise<void> => {
+  if (!payments.length) return;
+  const values = payments.map(p => [p.fecha, p.paciente, p.monto, p.metodo, p.comprobanteUrl]);
+  await window.gapi.client.sheets.spreadsheets.values.append({
+    spreadsheetId,
+    range: 'Pagos!A:E',
+    valueInputOption: 'USER_ENTERED',
+    resource: { values },
+  });
 };
